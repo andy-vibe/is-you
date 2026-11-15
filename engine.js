@@ -4,7 +4,7 @@
   'use strict';
 
   const NOUNS = ['baba', 'wall', 'rock', 'flag', 'water', 'lava', 'skull', 'key', 'door', 'grass', 'text'];
-  const PROPS = ['you', 'win', 'stop', 'push', 'sink', 'defeat', 'hot', 'melt', 'open', 'shut', 'move'];
+  const PROPS = ['you', 'win', 'stop', 'push', 'sink', 'defeat', 'hot', 'melt', 'open', 'shut', 'move', 'mirror', 'slide', 'shy'];
   const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
   const OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' };
 
@@ -19,6 +19,7 @@
     '=': 'is', '&': 'and',
     Y: 'you', V: 'win', X: 'stop', P: 'push', N: 'sink', E: 'defeat',
     H: 'hot', M: 'melt', O: 'open', C: 'shut', Z: 'move',
+    Q: 'mirror', I: 'slide', J: 'shy',
   };
 
   const isNoun = (w) => NOUNS.includes(w);
@@ -188,6 +189,9 @@
     return true;
   }
 
+  // Every object shifted during the current turn, with the direction it went (SLIDE uses this).
+  let moveLog = null;
+
   // Collect the whole push chain against the pre-move board, then shift each object exactly once.
   function doMove(state, o, dx, dy) {
     const chain = new Set();
@@ -199,7 +203,48 @@
       }
     };
     collect(o);
-    for (const m of chain) { m.x += dx; m.y += dy; }
+    for (const m of chain) {
+      m.x += dx; m.y += dy;
+      if (moveLog) moveLog.set(m, [dx, dy]);
+    }
+  }
+
+  // Move a group in one direction, front-most first so a line of them travels together.
+  function moveAll(state, group, dx, dy) {
+    group.sort((a, b) => (b.x * dx + b.y * dy) - (a.x * dx + a.y * dy));
+    for (const o of group) if (canMove(state, o, dx, dy)) doMove(state, o, dx, dy);
+  }
+
+  // SHY: anything next to a YOU (other than itself) steps directly away from it, if it can.
+  function fleeYou(state) {
+    const shy = state.objs.filter((o) => hasProp(state, o, 'shy'));
+    if (!shy.length) return;
+    const yous = state.objs.filter((o) => hasProp(state, o, 'you'));
+    for (const o of shy) {
+      for (const d of ['up', 'down', 'left', 'right']) {
+        const [dx, dy] = DIRS[d];
+        if (!yous.some((y) => y !== o && y.x === o.x - dx && y.y === o.y - dy)) continue;
+        if (canMove(state, o, dx, dy)) { o.dir = d; doMove(state, o, dx, dy); break; }
+      }
+    }
+  }
+
+  // SLIDE: whatever moved this turn and is SLIDE keeps going the same way until it is blocked,
+  // or until an OPEN/SHUT pair meets. Effects (sink, defeat, win...) only apply where it stops.
+  function slide(state) {
+    let active = new Map([...moveLog].filter(([o]) => hasProp(state, o, 'slide')));
+    for (let guard = 0; active.size && guard < 1000; guard++) {
+      const next = new Map();
+      const ahead = ([o, [dx, dy]]) => o.x * dx + o.y * dy;
+      for (const [o, [dx, dy]] of [...active].sort((a, b) => ahead(b) - ahead(a))) {
+        if (objsAt(state, o.x, o.y).some((t) => t !== o && opensShut(state, o, t))) continue;
+        if (!canMove(state, o, dx, dy)) continue;
+        moveLog = new Map();
+        doMove(state, o, dx, dy);
+        for (const [m, d] of moveLog) if (hasProp(state, m, 'slide')) next.set(m, d);
+      }
+      active = next;
+    }
   }
 
   function resolveInteractions(state) {
@@ -254,14 +299,18 @@
   function step(state, dir) {
     if (state.won) return false;
     const before = serialize(state);
+    moveLog = new Map();
     if (dir) {
       const [dx, dy] = DIRS[dir];
       const yous = state.objs.filter((o) => hasProp(state, o, 'you'));
       for (const o of yous) o.dir = dir;
-      // Front-most first so a line of YOU objects moves together.
-      yous.sort((a, b) => (b.x * dx + b.y * dy) - (a.x * dx + a.y * dy));
-      for (const o of yous) if (canMove(state, o, dx, dy)) doMove(state, o, dx, dy);
+      moveAll(state, yous, dx, dy);
+      // MIRROR objects make the opposite move.
+      const mirrors = state.objs.filter((o) => hasProp(state, o, 'mirror'));
+      for (const o of mirrors) o.dir = OPPOSITE[dir];
+      moveAll(state, mirrors, -dx, -dy);
     }
+    fleeYou(state);
     // Front-most first along each mover's facing, so a line of movers travels as one block.
     const ahead = (o) => o.x * DIRS[o.dir][0] + o.y * DIRS[o.dir][1];
     const movers = state.objs.filter((m) => hasProp(state, m, 'move')).sort((a, b) => ahead(b) - ahead(a));
@@ -274,6 +323,8 @@
       }
       doMove(state, o, dx, dy);
     }
+    slide(state);
+    moveLog = null;
     refreshRules(state);
     // Destruction can break rules; re-read them, but transformations happen only once per turn.
     if (resolveInteractions(state)) parseRules(state);

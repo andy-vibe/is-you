@@ -1,6 +1,6 @@
 // Offline support: serve from cache instantly, refresh the cache in the background.
 // New levels/code show up on the launch after they were fetched. Bump CACHE to force a clean cache.
-const CACHE = 'isyou-v1';
+const CACHE = 'isyou-v2';
 const FILES = ['./', 'index.html', 'engine.js', 'levels.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
